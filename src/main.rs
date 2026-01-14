@@ -1,8 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::{
+    io::ErrorKind,
+    path::{Path, PathBuf},
+    process::exit,
+};
 
 use anyhow::{Context, Result, bail};
-use clap::Parser;
-use dialoguer::{Input, Select, theme::ColorfulTheme};
+use clap::{Parser, ValueEnum};
+use dialoguer::{Input, Select, console, theme::ColorfulTheme};
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::{
     Client,
@@ -19,7 +23,6 @@ struct SearchResult {
 
 #[derive(Debug, Deserialize)]
 struct SearchResultInner {
-    total: String,
     list: Vec<SongDetail>,
 }
 
@@ -50,14 +53,47 @@ impl Display for SongDetail {
 struct Args {
     /// Song search name
     name: String,
+    /// file format
+    #[arg(short, long, default_value = "flac")]
+    format: Format,
     /// Download to
-    #[clap(default_value = ".")]
+    #[arg(short, long, default_value = ".")]
     path: PathBuf,
+}
+
+#[derive(Debug, ValueEnum, Clone, Copy)]
+enum Format {
+    Flac,
+    Mp3128,
+    Mp3320,
+}
+
+impl Format {
+    fn download_url_str(&self) -> &'static str {
+        match self {
+            Format::Flac => "flac",
+            Format::Mp3128 => "128",
+            Format::Mp3320 => "320",
+        }
+    }
+
+    fn file_format(&self) -> &'static str {
+        match self {
+            Format::Flac => "flac",
+            Format::Mp3128 | Format::Mp3320 => "mp3",
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() {
-    let Args { name, path } = Args::parse();
+    let Args { name, path, format } = Args::parse();
+
+    ctrlc::set_handler(|| {
+        let s = console::Term::stdout();
+        s.show_cursor().ok();
+    })
+    .expect("Failed to set ctrlc handler");
 
     let client = client().unwrap();
     let result_list = search(&client, &name).await.unwrap();
@@ -68,12 +104,18 @@ async fn main() {
         .default(0)
         .items(&list)
         .interact()
+        .inspect_err(|e| {
+            let dialoguer::Error::IO(e) = e;
+            if e.kind() == ErrorKind::Interrupted {
+                exit(130);
+            }
+        })
         .unwrap();
 
     let song = &list[select];
-    let result = get_download_url(&client, song).await.unwrap();
+    let result = get_download_url(&client, song, format).await.unwrap();
 
-    download(&client, &result, &path, &song.to_string())
+    download(&client, &result, &path, &song.to_string(), format)
         .await
         .unwrap();
 }
@@ -92,7 +134,7 @@ async fn search(client: &Client, name: &str) -> Result<SearchResult> {
     Ok(json)
 }
 
-async fn get_download_url(client: &Client, song: &SongDetail) -> Result<String> {
+async fn get_download_url(client: &Client, song: &SongDetail, format: Format) -> Result<String> {
     let mu_unlock_file = dirs::cache_dir()
         .context("Failed to get cache dir")?
         .join("mu_unlock");
@@ -107,13 +149,13 @@ async fn get_download_url(client: &Client, song: &SongDetail) -> Result<String> 
         input_unlock_code(&mu_unlock_file).await?
     };
 
-    let json = build_download_url_resp(client, song, unlock_code).await?;
+    let json = build_download_url_resp(client, song, unlock_code, format).await?;
 
     if json.success {
         Ok(json.result.unwrap())
     } else {
         let unlock_code = input_unlock_code(&mu_unlock_file).await?;
-        let json = build_download_url_resp(client, song, unlock_code).await?;
+        let json = build_download_url_resp(client, song, unlock_code, format).await?;
 
         if json.success {
             Ok(json.result.unwrap())
@@ -137,11 +179,14 @@ async fn build_download_url_resp(
     client: &Client,
     song: &SongDetail,
     unlock_code: String,
+    format: Format,
 ) -> Result<SongDownloadUrl, anyhow::Error> {
     let json = client
         .get(format!(
-            "https://api.flac.life/url/{}/{}/flac",
-            song.platform, song.id
+            "https://api.flac.life/url/{}/{}/{}",
+            song.platform,
+            song.id,
+            format.download_url_str()
         ))
         .headers(json_header()?)
         .header("unlockcode", unlock_code)
@@ -154,8 +199,15 @@ async fn build_download_url_resp(
     Ok(json)
 }
 
-async fn download(client: &Client, url: &str, path: &Path, name: &str) -> Result<()> {
-    let mut f = tokio::fs::File::create(path.join(format!("{name}.flac"))).await?;
+async fn download(
+    client: &Client,
+    url: &str,
+    path: &Path,
+    name: &str,
+    format: Format,
+) -> Result<()> {
+    let mut f =
+        tokio::fs::File::create(path.join(format!("{name}.{}", format.file_format()))).await?;
 
     let mut resp = client.get(url).send().await?.error_for_status()?;
 
