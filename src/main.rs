@@ -104,20 +104,19 @@ async fn get_download_url(client: &Client, song: &SongDetail) -> Result<String> 
     let unlock_code = if let Ok(unlock_code) = unlock_code {
         unlock_code
     } else {
-        let unlock_code = input_unlock_code(&mu_unlock_file).await?;
-        unlock_code
+        input_unlock_code(&mu_unlock_file).await?
     };
 
     let json = build_download_url_resp(client, song, unlock_code).await?;
 
     if json.success {
-        return Ok(json.result.unwrap());
+        Ok(json.result.unwrap())
     } else {
         let unlock_code = input_unlock_code(&mu_unlock_file).await?;
         let json = build_download_url_resp(client, song, unlock_code).await?;
 
         if json.success {
-            return Ok(json.result.unwrap());
+            Ok(json.result.unwrap())
         } else {
             bail!("Failed to get download url")
         }
