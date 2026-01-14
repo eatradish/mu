@@ -38,6 +38,7 @@ struct SongDetail {
 struct SongDownloadUrl {
     success: bool,
     result: Option<String>,
+    message: Option<String>,
 }
 
 impl Display for SongDetail {
@@ -183,13 +184,19 @@ async fn get_download_url(client: &Client, song: &SongDetail, format: Format) ->
     if json.success {
         Ok(json.result.unwrap())
     } else {
-        let unlock_code = input_unlock_code(&mu_unlock_file).await?;
-        let json = build_download_url_resp(client, song, unlock_code, format).await?;
-
-        if json.success {
-            Ok(json.result.unwrap())
+        if let Some(msg) = json.message
+            && msg == "获取失败"
+        {
+            bail!("Failed to get download url: {msg}")
         } else {
-            bail!("Failed to get download url")
+            let unlock_code = input_unlock_code(&mu_unlock_file).await?;
+            let json = build_download_url_resp(client, song, unlock_code, format).await?;
+
+            if json.success {
+                Ok(json.result.unwrap())
+            } else {
+                bail!("Failed to get download url: {}", json.message.unwrap())
+            }
         }
     }
 }
