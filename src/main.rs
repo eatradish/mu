@@ -56,6 +56,9 @@ struct Args {
     /// file format
     #[arg(short, long, default_value = "flac")]
     format: Format,
+    /// Download file platform
+    #[arg(long, default_value = "kuwo")]
+    platform: Platform,
     /// Download to
     #[arg(short, long, default_value = ".")]
     path: PathBuf,
@@ -66,6 +69,27 @@ enum Format {
     Flac,
     Mp3128,
     Mp3320,
+}
+
+#[derive(Debug, ValueEnum, Clone, Copy)]
+enum Platform {
+    Kuwo,
+    Kugou,
+    Migu,
+}
+
+impl Display for Platform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Platform::Kuwo => "kuwo",
+                Platform::Kugou => "kugou",
+                Platform::Migu => "migu",
+            }
+        )
+    }
 }
 
 impl Format {
@@ -87,7 +111,12 @@ impl Format {
 
 #[tokio::main]
 async fn main() {
-    let Args { name, path, format } = Args::parse();
+    let Args {
+        name,
+        path,
+        format,
+        platform,
+    } = Args::parse();
 
     ctrlc::set_handler(|| {
         let s = console::Term::stdout();
@@ -96,7 +125,7 @@ async fn main() {
     .expect("Failed to set ctrlc handler");
 
     let client = client().unwrap();
-    let result_list = search(&client, &name).await.unwrap();
+    let result_list = search(&client, &name, platform).await.unwrap();
     let list = result_list.result.list;
 
     let select = Select::with_theme(&ColorfulTheme::default())
@@ -120,9 +149,9 @@ async fn main() {
         .unwrap();
 }
 
-async fn search(client: &Client, name: &str) -> Result<SearchResult> {
+async fn search(client: &Client, name: &str, platform: Platform) -> Result<SearchResult> {
     let resp = client
-        .get("https://api.flac.life/search/kuwo")
+        .get(format!("https://api.flac.life/search/{platform}"))
         .query(&[("keyword", name), ("page", "1"), ("size", "30")])
         .headers(json_header()?)
         .send()
