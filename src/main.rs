@@ -235,10 +235,7 @@ async fn download(
     name: &str,
     format: Format,
 ) -> Result<()> {
-    let mut f =
-        tokio::fs::File::create(path.join(format!("{name}.{}", format.file_format()))).await?;
-
-    let mut resp = client.get(url).send().await?.error_for_status()?;
+    let resp = client.get(url).send().await?.error_for_status()?;
 
     let resp_head = resp.headers();
 
@@ -259,14 +256,30 @@ async fn download(
             .progress_chars("=>-"),
     );
 
+    let file_path = path.join(format!("{name}.{}", format.file_format()));
+
+    if download_inner(resp, &pb, &file_path).await.is_err() {
+        tokio::fs::remove_file(file_path).await?;
+    }
+
+    pb.finish_and_clear();
+
+    Ok(())
+}
+
+async fn download_inner(
+    mut resp: reqwest::Response,
+    pb: &ProgressBar,
+    file_path: &Path,
+) -> Result<(), anyhow::Error> {
+    let mut f = tokio::fs::File::create(file_path).await?;
+
     while let Ok(Some(chunk)) = resp.chunk().await {
         f.write_all(&chunk).await?;
         pb.inc(chunk.len() as u64);
     }
 
     f.shutdown().await?;
-    pb.finish_and_clear();
-
     Ok(())
 }
 
